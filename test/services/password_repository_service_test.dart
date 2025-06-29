@@ -6,7 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:mockito/annotations.dart';
 import 'package:mockito/mockito.dart';
-import 'package:pass/logic/password_repository_profile.dart';
+import 'package:pass/models/password_repository_profile.dart';
 import 'package:pass/services/git_service.dart';
 import 'package:pass/services/gpg_key_service.dart';
 import 'package:pass/services/password_repository_service.dart';

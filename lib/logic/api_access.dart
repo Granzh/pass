@@ -1,5 +1,5 @@
 import 'package:http/http.dart' as http;
-import 'package:pass/logic/secure_storage.dart';
+import 'package:pass/core/utils/secure_storage.dart';
 
 
 final Future<String?> token = secureStorage.read(key: 'access_token');

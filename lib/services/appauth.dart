@@ -3,7 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter_appauth/flutter_appauth.dart';
 import 'package:http/http.dart' as http;
-import 'package:pass/logic/secure_storage.dart';
+import 'package:pass/core/utils/secure_storage.dart';
 import 'package:pass/models/git_repository_model.dart';
 
 /// Service for handling OAuth2 authentication with Git providers

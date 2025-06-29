@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'package:openpgp/openpgp.dart';
 
-import '../logic/secure_storage.dart';
+import '../core/utils/secure_storage.dart';
 import '../models/gpg_key.dart';
 
 class GPGService {
@@ -68,8 +68,41 @@ class GPGService {
     }
   }
 
+  Future<void> importPrivateKeyForProfile({
+    required String profileId,
+    required String privateKeyArmored,
+    required String passphraseForImportedKey, // Парольная фраза ИМПОРТИРУЕМОГО ключа
+    String? publicKeyArmored,
+  }) async {
+    try {
+      // Пытаемся проверить ключ и парольную фразу, например, дешифровав что-то
+      // или если библиотека позволяет получить публичный ключ из приватного с парольной фразой.
+      // OpenPGP.dart не имеет прямого метода для извлечения public key из private c passphrase,
+      // но при дешифровке он использует passphrase для доступа к private key.
+
+      String finalPublicKey = publicKeyArmored ?? '';
+      if (finalPublicKey.isEmpty) {
+        // Попытка извлечь публичный ключ (может быть сложно или невозможно без доп. инструментов/логики)
+        // В OpenPGP.dart нет простого `OpenPGP.getPublicKeyFromPrivateKey(privateKeyArmored, passphraseForImportedKey)`
+        // Поэтому, если публичный ключ не предоставлен, шифрование для этого профиля может быть невозможно.
+        // Можно попробовать "разблокировать" приватный ключ с помощью фразы, чтобы убедиться, что она верна.
+        // Например, попытаться подписать тестовые данные.
+        print("Warning: Importing private key for profile $profileId without a public key. Encryption may rely on the private key itself or fail.");
+      }
+
+      GPGKey key = GPGKey(profileId: profileId, publicKey: publicKeyArmored ?? '', privateKey: privateKeyArmored, passphrase: passphraseForImportedKey);
+      // Сохраняем компоненты. Парольная фраза здесь - это та, что нужна для использования импортированного приватного ключа.
+      await saveKeyForProfileById(
+        profileId,
+        key
+      );
+    } catch (e) {
+      throw Exception('Failed to import GPG private key: $e');
+    }
+  }
+
   // Key Generation and Management
-  Future<GPGKey> generateKeyPair(String userId, String passphrase) async {
+  Future<GPGKey> generateNewKeyForProfile({required String profileId, required String passphrase,required String? userName,required String? userEmail}) async {
     try {
       // Configure key options
       final keyOptions = KeyOptions()
@@ -81,18 +114,22 @@ class GPGService {
       // Generate key pair
       final keyPair = await OpenPGP.generate(
         options: Options()
-          ..name = userId
-          ..email = '$userId@pass.app'
+          ..name = userName ?? profileId
+          ..email = userEmail ?? '$profileId@pass.app'
           ..passphrase = passphrase
           ..keyOptions = keyOptions,
       );
 
-      return GPGKey(
-        profileId: userId,
+      GPGKey gpgKey = GPGKey(
+        profileId: profileId,
         publicKey: keyPair.publicKey,
         privateKey: keyPair.privateKey,
         passphrase: passphrase,
       );
+
+      saveKeyForProfileById(profileId, gpgKey);
+
+      return gpgKey;
     } catch (e) {
       throw Exception('Failed to generate key pair: $e');
     }
@@ -146,6 +183,79 @@ class GPGService {
       await outputFile.writeAsString(decrypted);
     } catch (e) {
       throw Exception('Failed to decrypt file: $e');
+    }
+  }
+
+  Future<String> encryptDataForProfile(String data, String profileId) async {
+    final gpgKey = await getKeyForProfileById(profileId);
+    if (gpgKey == null || gpgKey.publicKey.isEmpty) {
+      // Если публичного ключа нет (например, был импортирован только приватный без публичного),
+      // то шифрование стандартным способом (для получателя) невозможно.
+      // Некоторые GPG реализации позволяют "шифровать для себя" используя только приватный ключ,
+      // но это не типичное использование для обмена данными.
+      // Для `pass`, вам нужен публичный ключ получателей (обычно это ваш собственный публичный ключ).
+      throw Exception('Public GPG key not found or is empty for profile $profileId. Cannot encrypt data.');
+    }
+    try {
+      // Шифруем данные, используя публичный ключ профиля.
+      return await OpenPGP.encrypt(data, gpgKey.publicKey);
+    } catch (e) {
+      throw Exception('Failed to encrypt data for profile $profileId: $e');
+    }
+  }
+
+  Future<String> decryptDataForProfile(
+      String encryptedData,
+      String profileId,
+      String userProvidedPassphrase, // Парольная фраза, которую пользователь вводит для доступа к профилю/дешифровки
+      ) async {
+    final gpgKey = await getKeyForProfileById(profileId);
+    if (gpgKey == null) {
+      throw Exception('GPG key not found for profile $profileId. Cannot decrypt data.');
+    }
+
+    // `userProvidedPassphrase` используется библиотекой OpenPGP для "разблокировки"
+    // `gpgKey.privateKey`, если этот приватный ключ был зашифрован.
+    // `gpgKey.passphrase` (сохраненная с ключом) должна совпадать с `userProvidedPassphrase`
+    // для успешной операции, если приватный ключ защищен.
+    // Если приватный ключ не был зашифрован парольной фразой при его создании/импорте,
+    // то `userProvidedPassphrase` может быть проигнорирована библиотекой (или должна быть пустой).
+    try {
+      return await OpenPGP.decrypt(encryptedData, gpgKey.privateKey, userProvidedPassphrase);
+    } catch (e) {
+      if (e.toString().toLowerCase().contains('bad passphrase') ||
+          e.toString().toLowerCase().contains('incorrect pass') ||
+          e.toString().toLowerCase().contains('decryption failed')) { // OpenPGP.dart может кидать разные ошибки
+        throw Exception('Failed to decrypt data: Incorrect passphrase or corrupted data.');
+      }
+      throw Exception('Failed to decrypt data for profile: $e');
+    }
+  }
+  /// Verifies if the provided passphrase is correct for the given profile's private key.
+  /// 
+  /// Returns `true` if the passphrase is correct, `false` otherwise.
+  /// Throws an exception if the profile or key is not found.
+  Future<bool> verifyPassphraseForProfile(String profileId, String passphrase) async {
+    try {
+      // Get the key for the profile
+      final key = await getKeyForProfileById(profileId);
+      if (key == null) {
+        throw Exception('No GPG key found for profile $profileId');
+      }
+
+      // Try to sign a test message with the private key and passphrase
+      // If the passphrase is wrong, this will throw an exception
+      await signMessage(
+        'passphrase_verification_${DateTime.now().millisecondsSinceEpoch}',
+        key.privateKey,
+        passphrase,
+      );
+      
+      // If we get here, the passphrase is correct
+      return true;
+    } catch (e) {
+      // If there's an error (like wrong passphrase), return false
+      return false;
     }
   }
 

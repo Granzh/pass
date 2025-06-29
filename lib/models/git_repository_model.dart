@@ -1,4 +1,4 @@
-import '../logic/appauth.dart';
+import '../services/appauth.dart';
 
 class GitRepository {
   final String id;

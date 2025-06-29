@@ -17,7 +17,7 @@ class GPGKey {
     'passphrase': passphrase,
   };
 
-  factory GPGKey.fromJson(String profileId,Map<String, dynamic> json) => GPGKey(
+  factory GPGKey.fromJson(String profileId, Map<String, dynamic> json) => GPGKey(
       profileId: profileId,
       publicKey: json['publicKey'],
       privateKey: json['privateKey'],

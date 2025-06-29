@@ -4,7 +4,7 @@ import 'dart:async';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import 'package:git/git.dart';
-import '../logic/secure_storage.dart';
+import '../core/utils/secure_storage.dart';
 import '../models/git_repository_model.dart';
 
 class GitService {
@@ -207,6 +207,5 @@ class GitService {
       throw Exception('Failed to switch branch: $e');
     }
   }
-
 
 }
