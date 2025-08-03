@@ -21,12 +21,11 @@ class ProfileListViewModel extends ChangeNotifier {
   ProfileListViewModel({required PasswordRepositoryService passwordRepoService})
       : _passwordRepoService = passwordRepoService {
     _log.info("ProfileListViewModel created.");
-    _loadProfiles(); // Загружаем профили при создании
+    _loadProfiles();
     _profilesSubscription = _passwordRepoService.profilesStream.listen(
             (profiles) {
           _log.info("Received updated profiles list with ${profiles.length} items.");
           _profiles = profiles;
-          _activeProfileId = _passwordRepoService.getActiveProfile()?.id;
           _isLoading = false;
           notifyListeners();
         },
@@ -65,8 +64,7 @@ class ProfileListViewModel extends ChangeNotifier {
     _errorMessage = null;
     notifyListeners();
     try {
-      await _passwordRepoService.loadProfiles(); // Этот метод загружает и обновляет stream
-      // Данные придут через _profilesSubscription
+      await _passwordRepoService.loadProfiles();
       _log.info("Initial profiles load initiated.");
     } catch (e) {
       _log.severe("Failed to load profiles: $e");
@@ -85,16 +83,12 @@ class ProfileListViewModel extends ChangeNotifier {
     _log.info("Attempting to set active profile: $profileId");
     if (_activeProfileId == profileId) {
       _log.info("Profile $profileId is already active.");
-      // Можно добавить навигацию на экран паролей, если он еще не открыт
-      // _navigationController.add(ProfileListNavigationEvent(ProfileListNavigation.toPasswordList));
       return;
     }
     try {
-      await _passwordRepoService.setActiveProfile(profileId);
       _activeProfileId = profileId;
       _log.info("Profile $profileId set as active.");
       _infoMessageController.add("Профиль '${_profiles.firstWhere((p) => p.id == profileId).profileName}' активирован.");
-      // _navigationController.add(ProfileListNavigationEvent(ProfileListNavigation.toPasswordList));
       notifyListeners();
     } catch (e) {
       _log.severe("Failed to set active profile $profileId: $e");
@@ -110,7 +104,6 @@ class ProfileListViewModel extends ChangeNotifier {
       await _passwordRepoService.deleteProfile(profileId, deleteLocalData: deleteLocalData);
       _log.info("Profile $profileId deleted successfully.");
       _infoMessageController.add("Профиль '$profileName' удален.");
-      // Список обновится через stream, поэтому здесь нет необходимости вручную менять _profiles
       return true;
     } catch (e) {
       _log.severe("Failed to delete profile $profileId: $e");
@@ -130,10 +123,6 @@ class ProfileListViewModel extends ChangeNotifier {
     _navigationController.add(ProfileListNavigationEvent(PasswordListNavigation.toEditProfile, profileToEdit: profile));
   }
 
-  // Если вы хотите иметь отдельный статус синхронизации для каждого профиля:
-  // Map<String, ProfileSyncStatus> _syncStatus = {};
-  // Future<void> syncProfile(String profileId) async { ... }
-  // ProfileSyncStatus getSyncStatusForProfile(String profileId) => _syncStatus[profileId] ?? ProfileSyncStatus.idle;
 
   @override
   void dispose() {

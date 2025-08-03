@@ -36,7 +36,6 @@ class _AddEditPasswordEntryScreenState
   late TextEditingController _usernameController;
   late TextEditingController _notesController;
 
-  // Для кастомных метаданных будем управлять списком контроллеров
   final List<TextEditingController> _customMetaKeyControllers = [];
   final List<TextEditingController> _customMetaValueControllers = [];
 

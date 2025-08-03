@@ -29,7 +29,7 @@ class AddEditProfileViewModel extends ChangeNotifier {
   final GitRepository? _initialSelectedGitRepo;
 
   PasswordSourceType? get existingProfileType => _existingProfile?.type;
-  String? get existingProfileDisplayName => _existingProfile?.profileName; // Если нужно имя
+  String? get existingProfileDisplayName => _existingProfile?.profileName;
   String? get existingProfileRepoCloneUrl => _existingProfile?.repositoryCloneUrl;
   String? get existingProfileRepoFullName => _existingProfile?.repositoryFullName;
   bool get existingProfileIsGitType => _existingProfile?.isGitType() ?? false;
@@ -93,7 +93,6 @@ class AddEditProfileViewModel extends ChangeNotifier {
   set selectedSourceType(PasswordSourceType value) {
     if (_selectedSourceType == value) return;
 
-    // PasswordSourceType oldType = _selectedSourceType; // Если понадобится
     _selectedSourceType = value;
 
     if (isEditing && _existingProfile != null) {
@@ -102,14 +101,13 @@ class AddEditProfileViewModel extends ChangeNotifier {
       }
     }
 
-    if (_selectedSourceType.isGitType) { // Убедитесь, что isGitType() это правильный вызов
-      _oauthErrorMessage = null; // Сбрасываем ошибку OAuth при смене типа
-      _repositoryLoadingError = null; // Сбрасываем ошибку загрузки репо
-      _remoteRepositories = null; // Очищаем список старых репо
-      _selectedRemoteRepository = null; // Очищаем выбранный репозиторий
-      checkAuthenticationAndLoadRepos(); // Загружаем для нового типа/провайдера
+    if (_selectedSourceType.isGitType) {
+      _oauthErrorMessage = null;
+      _repositoryLoadingError = null;
+      _remoteRepositories = null;
+      _selectedRemoteRepository = null;
+      checkAuthenticationAndLoadRepos();
     } else {
-      // Если тип сменили на не-Git, очищаем данные о репозиториях
       _remoteRepositories = null;
       _selectedRemoteRepository = null;
       _repositoryLoadingError = null;
@@ -275,7 +273,7 @@ class AddEditProfileViewModel extends ChangeNotifier {
             profileId: currentProfile.id,
             newProfileName: nameNeedsUpdate ? profileName.trim() : null,
             shouldRegenerateGpgKey: _shouldGenerateOrReGenerateGpgKey,
-            newGpgUserName: _shouldGenerateOrReGenerateGpgKey ? gpgUserName : null, // Сервис использует имя профиля
+            newGpgUserName: _shouldGenerateOrReGenerateGpgKey ? gpgUserName : null,
             newGpgUserEmail: _shouldGenerateOrReGenerateGpgKey ? gpgUserEmail?.trim() : null,
             newGpgPassphraseForRegen: _shouldGenerateOrReGenerateGpgKey ? gpgKeyPassphrase : null,
           );
@@ -287,7 +285,7 @@ class AddEditProfileViewModel extends ChangeNotifier {
           PasswordRepositoryProfile updatedProfileObject = currentProfile.copyWith(type: _selectedSourceType);
           if (_selectedSourceType == PasswordSourceType.localFolder) {
             updatedProfileObject = updatedProfileObject.copyWith(
-              repositoryFullName: localPath.trim(), // Используем новое локальное имя
+              repositoryFullName: localPath.trim(),
               repositoryId: null,
               repositoryCloneUrl: null,
             );
@@ -309,7 +307,7 @@ class AddEditProfileViewModel extends ChangeNotifier {
               return;
             }
           }
-          await _profileManager.updateProfile(updatedProfileObject); // Прямой вызов, если сервис не умеет
+          await _profileManager.updateProfile('', updatedProfileObject);
           _infoMessagesController.add('Тип профиля изменен. Может потребоваться ручная синхронизация или перезапуск.');
 
 
@@ -324,7 +322,7 @@ class AddEditProfileViewModel extends ChangeNotifier {
 
       } else { // --- ДОБАВЛЕНИЕ НОВОГО ПРОФИЛЯ ---
         _log.info("Creating new profile. Type: $_selectedSourceType");
-        GitRepository? gitRepoInfoForCreate; // Будет _initialSelectedGitRepo для Git
+        GitRepository? gitRepoInfoForCreate;
         String? explicitLocalFolderPathForCreate;
 
         if (_selectedSourceType.isGitType) {
@@ -357,7 +355,7 @@ class AddEditProfileViewModel extends ChangeNotifier {
     }
   }
 
-  Future<void> startGitOAuthFlow(GitProvider provider) async { // Изменили параметр на GitProvider
+  Future<void> startGitOAuthFlow(GitProvider provider) async {
     if (_isAuthenticatingOAuth) return;
 
     _isAuthenticatingOAuth = true;
@@ -369,13 +367,11 @@ class AddEditProfileViewModel extends ChangeNotifier {
 
     try {
       _log.info('Attempting OAuth for ${provider.toString()}');
-      // AppOAuthService сам обменивает код на токен и сохраняет его
       await _appOAuthService.authenticate(
         provider == GitProvider.github ? PasswordSourceType.github : PasswordSourceType.gitlab,
       );
 
       _log.info('OAuth successful for ${provider.toString()}. Tokens stored.');
-      // Автоматически загружаем репозитории после успешной аутентификации
       await loadRemoteRepositories(provider);
 
     } catch (e, s) {
@@ -400,8 +396,7 @@ class AddEditProfileViewModel extends ChangeNotifier {
       if (!isAuthenticated) {
         _repositoryLoadingError = 'Необходимо авторизоваться через ${provider.toString()}.';
         _log.warning('Attempted to load repos for $provider without auth.');
-        // UI должен предложить аутентификацию
-        return; // Выходим, если не аутентифицирован
+        return;
       }
 
       final repos = await _gitApiService.getRepositories(provider);
@@ -416,7 +411,6 @@ class AddEditProfileViewModel extends ChangeNotifier {
       _repositoryLoadingError = 'Ошибка загрузки репозиториев: ${e.message}';
       if (e.statusCode == 401) {
         _repositoryLoadingError = 'Сессия истекла для ${provider.toString()}. Пожалуйста, войдите снова.';
-        // Можно предложить очистить токены или просто повторить вход
       }
     } catch (e, s) {
       _log.severe('Error loading repositories for ${provider.toString()}: $e', e, s);

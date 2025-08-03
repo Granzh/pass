@@ -12,7 +12,7 @@ import '../../services/password_repository_service.dart';
 
 class AddEditPasswordEntryViewModel extends ChangeNotifier {
   final PasswordRepositoryService _passwordRepoService;
-  final GPGSessionService _gpgSessionService; // <--- ДОБАВЛЕНО
+  final GPGSessionService _gpgSessionService;
   final String _profileId;
   final PasswordEntry? _initialEntry;
 
@@ -20,11 +20,11 @@ class AddEditPasswordEntryViewModel extends ChangeNotifier {
 
   AddEditPasswordEntryViewModel({
     required PasswordRepositoryService passwordRepoService,
-    required GPGSessionService gpgSessionService, // <--- ДОБАВЛЕНО
+    required GPGSessionService gpgSessionService,
     required String profileId,
     PasswordEntry? entryToEdit,
   })  : _passwordRepoService = passwordRepoService,
-        _gpgSessionService = gpgSessionService, // <--- ИНИЦИАЛИЗИРОВАНО
+        _gpgSessionService = gpgSessionService,
         _profileId = profileId,
         _initialEntry = entryToEdit {
     _log.info(
@@ -34,15 +34,14 @@ class AddEditPasswordEntryViewModel extends ChangeNotifier {
       folderPath = entryToEdit.folderPath;
       password = entryToEdit.password;
       _metadata = Map.from(entryToEdit.metadata);
-      url = entryToEdit.url; // Предполагая, что PasswordEntry имеет эти поля напрямую
-      username = entryToEdit.username; // или вы их извлекаете из метаданных, как раньше
+      url = entryToEdit.url;
+      username = entryToEdit.username;
       notes = _extractCombinedNotes(entryToEdit.metadata);
       _metadata.removeWhere((key, _) =>
       ['url', 'URL', 'username', 'user', 'login', 'notes', 'comment']
-          .contains(key.toLowerCase()) || // Сделал toLowerCase для надежности
+          .contains(key.toLowerCase()) ||
           key.startsWith('line_'));
     } else {
-      // password = generateSecurePassword(); // Можно генерировать сразу, если нужно
     }
   }
 
@@ -54,7 +53,7 @@ class AddEditPasswordEntryViewModel extends ChangeNotifier {
   String? notes;
   Map<String, String> _metadata = {};
 
-  Map<String, String> get customMetadata => Map.unmodifiable(_metadata); // Неизменяемая копия для безопасности
+  Map<String, String> get customMetadata => Map.unmodifiable(_metadata);
 
   bool _isLoading = false;
   bool get isLoading => _isLoading;
@@ -87,7 +86,7 @@ class AddEditPasswordEntryViewModel extends ChangeNotifier {
   String? validateUrl(String? value) {
     if (value != null && value.isNotEmpty) {
       final uri = Uri.tryParse(value);
-      if (uri == null || !uri.hasAbsolutePath || !uri.hasScheme) { // Проверка схемы и абсолютного пути
+      if (uri == null || !uri.hasAbsolutePath || !uri.hasScheme) {
         return 'Invalid URL format (e.g., http://example.com).';
       }
     }
@@ -136,7 +135,7 @@ class AddEditPasswordEntryViewModel extends ChangeNotifier {
   }
 
   void updateNotes(String? value) {
-    notes = value; // trim() может быть нежелателен для многострочных заметок
+    notes = value;
     notifyListeners();
   }
 
@@ -153,13 +152,13 @@ class AddEditPasswordEntryViewModel extends ChangeNotifier {
   }
 
   void generateNewPassword({
-    int length = 16, // Эти значения могут приходить из настроек пользователя
+    int length = 16,
     bool includeUppercase = true,
     bool includeLowercase = true,
     bool includeNumbers = true,
     bool includeSymbols = true,
   }) {
-    password = generateSecurePassword( // Убедитесь, что generateSecurePassword импортирована
+    password = generateSecurePassword(
       length: length,
       includeUppercase: includeUppercase,
       includeLowercase: includeLowercase,
@@ -191,7 +190,6 @@ class AddEditPasswordEntryViewModel extends ChangeNotifier {
       if (url != null && url!.isNotEmpty) finalMetadata['url'] = url!;
       if (username != null && username!.isNotEmpty) finalMetadata['username'] = username!;
       if (notes != null && notes!.isNotEmpty) {
-        // Если вы храните notes в 'notes' или 'comment', убедитесь, что это согласовано
         finalMetadata['notes'] = notes!;
       }
 
@@ -200,9 +198,8 @@ class AddEditPasswordEntryViewModel extends ChangeNotifier {
         entryToSave = _initialEntry.copyWith(
           entryName: entryName.trim(),
           folderPath: folderPath.trim(),
-          password: password, // Пароль не шифруется здесь, это делает репозиторий
+          password: password,
           metadata: finalMetadata,
-          // lastModified можно обновить в репозитории или оставить как есть
         );
       } else {
         entryToSave = PasswordEntry(
@@ -210,7 +207,7 @@ class AddEditPasswordEntryViewModel extends ChangeNotifier {
           folderPath: folderPath.trim(),
           password: password,
           metadata: finalMetadata,
-          lastModified: DateTime.now().toUtc(), // Используйте UTC для консистентности
+          lastModified: DateTime.now().toUtc(),
         );
       }
 
@@ -220,8 +217,7 @@ class AddEditPasswordEntryViewModel extends ChangeNotifier {
         userGpgPassphrase: userGpgPassphrase,
       );
 
-      // Если сохранение успешно, значит парольная фраза верна. Кэшируем ее.
-      _gpgSessionService.setPassphrase(_profileId, userGpgPassphrase); // <--- КЭШИРУЕМ
+      _gpgSessionService.setPassphrase(_profileId, userGpgPassphrase);
       _log.info(
           "Entry '${entryToSave.fullPath}' saved successfully for profile '$_profileId'. Passphrase cached.");
 
@@ -231,16 +227,15 @@ class AddEditPasswordEntryViewModel extends ChangeNotifier {
       _errorMessage = "Failed to save entry: $e";
       if (e.toString().toLowerCase().contains("gpg") ||
           e.toString().toLowerCase().contains("passphrase") ||
-          e.toString().toLowerCase().contains("decryption failed")) { // Добавил decryption failed
+          e.toString().toLowerCase().contains("decryption failed")) {
         _errorMessage = "GPG error during save: ${e.toString().split(':').last.trim()}. Check passphrase or GPG setup.";
-        _gpgSessionService.clearPassphrase(reason: "Encryption/save error"); // <--- ОЧИЩАЕМ КЭШ ПРИ ОШИБКЕ
+        _gpgSessionService.clearPassphrase(reason: "Encryption/save error");
       }
     } finally {
       _isLoading = false;
       notifyListeners();
     }
   }
-  /// Очищает сообщение об ошибке. Вызывать из UI после его отображения.
   void clearErrorMessage() {
     _errorMessage = null;
     notifyListeners();

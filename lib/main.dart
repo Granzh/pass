@@ -1,6 +1,13 @@
+import 'package:app_links/app_links.dart';
+import 'package:device_info_plus/device_info_plus.dart';
+import 'package:file/file.dart';
+import 'package:file/local.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:http/http.dart';
 import 'package:logging/logging.dart';
 import 'package:pass/services/auth_services/app_oauth_service.dart';
+import 'package:pass/services/auth_services/git_auth.dart';
 import 'package:pass/services/git_services/git_api_service.dart';
 import 'package:pass/services/git_services/git_orchestrator.dart';
 import 'package:pass/services/git_services/git_service.dart';
@@ -17,6 +24,7 @@ import 'package:pass/ui/view_models/password_entries_view_model.dart';
 import 'package:provider/provider.dart';
 
 import 'core/utils/enums.dart';
+import 'core/utils/pgp_provider.dart';
 import 'models/git_repository_model.dart';
 import 'models/password_entry.dart';
 import 'models/password_repository_profile.dart';
@@ -24,7 +32,7 @@ import 'ui/screens/profile_list_screen.dart';
 import 'ui/view_models/profile_list_view_model.dart';
 
 void _setupLogging() {
-  Logger.root.level = Level.ALL; // Установите нужный уровень логирования
+  Logger.root.level = Level.ALL;
   Logger.root.onRecord.listen((record) {
     // ignore: avoid_print
     print('${record.level.name}: ${record.time}: ${record.loggerName}: ${record.message}');
@@ -36,22 +44,50 @@ void _setupLogging() {
 }
 
 void main() async {
-  WidgetsFlutterBinding.ensureInitialized(); // Обязательно для асинхронных операций до runApp
+  WidgetsFlutterBinding.ensureInitialized();
   _setupLogging();
 
-  final gpgService = GPGService();
-  final gitApiService = GitApiService();
-  final appOAuthService = AppOAuthService();
-  final profileManager = RepositoryProfileManager();
-  final entryService = PasswordEntryService();
-  final gitService = GitService();
+  final FlutterSecureStorage secureStorage = FlutterSecureStorage();
+  DefaultPGPProvider pgpProvider = DefaultPGPProvider();
+  FileSystem fileSystem = LocalFileSystem();
+  Client httpClient = Client();
+  AppLinks appLinks = AppLinks();
+
+  final gpgService = GPGService(
+      secureStorage: secureStorage,
+      pgpProvider: pgpProvider,
+      fileSystem: fileSystem
+  );
+  final secureGitAuth = SecureGitAuth(
+      secureStorage: secureStorage,
+      deviceInfo: DeviceInfoPlugin(),
+  );
+  final gitApiService = GitApiService(
+      secureGitAuth: secureGitAuth,
+      httpClient: httpClient
+  );
+  final gitService = GitService(
+      secureStorage: secureStorage,
+      fileSystem: fileSystem
+  );
+  final appOAuthService = AppOAuthService(
+      appLinks: appLinks,
+      secureGitAuth: secureGitAuth
+  );
+  final profileManager = RepositoryProfileManager(
+      secureStorage: secureStorage
+  );
+  final entryService = PasswordEntryService(
+      gitService: gitService,
+      profileManager: profileManager,
+      gpgService: gpgService
+  );
 
   final gitOrchestrator = GitOrchestrator(
     gitService: gitService,
     profileManager: profileManager,
   );
 
-  // PasswordRepositoryService может зависеть от других сервисов
   final passwordRepoService = PasswordRepositoryService(
     gpgService: gpgService,
     profileManager: profileManager,
@@ -65,6 +101,7 @@ void main() async {
 
 
   runApp(MyApp(
+    secureGitAuth: secureGitAuth,
     passwordRepositoryService: passwordRepoService,
     gpgService: gpgService,
     gpgSessionService: gpgSessionService,
@@ -81,9 +118,11 @@ class MyApp extends StatelessWidget {
   final RepositoryProfileManager profileManager;
   final GitApiService gitApiService;
   final AppOAuthService appOAuthService;
+  final SecureGitAuth secureGitAuth;
 
   const MyApp({
     super.key,
+    required this.secureGitAuth,
     required this.passwordRepositoryService,
     required this.gpgService,
     required this.gpgSessionService,
@@ -94,11 +133,9 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // MultiProvider используется для предоставления нескольких сервисов/объектов
-    // вниз по дереву виджетов.
     return MultiProvider(
       providers: [
-        // Предоставляем основные сервисы, которые могут понадобиться в разных частях приложения
+        Provider<SecureGitAuth>.value(value: secureGitAuth),
         Provider<PasswordRepositoryService>.value(value: passwordRepositoryService),
         Provider<GPGService>.value(value: gpgService),
         ChangeNotifierProvider<GPGSessionService>.value(value: gpgSessionService), // GPGSessionService - ChangeNotifier
@@ -106,50 +143,30 @@ class MyApp extends StatelessWidget {
         Provider<GitApiService>.value(value: gitApiService),
         Provider<AppOAuthService>.value(value: appOAuthService),
 
-        // ViewModel для экранов верхнего уровня можно предоставить здесь,
-        // или создавать их непосредственно на самих экранах, если они не нужны до этого.
-        // Для ProfileListViewModel и PasswordEntriesViewModel это может быть уместно здесь,
-        // так как они управляют основными данными приложения.
         ChangeNotifierProvider<ProfileListViewModel>(
           create: (_) => ProfileListViewModel(passwordRepoService: passwordRepositoryService),
         ),
         ChangeNotifierProvider<PasswordEntriesViewModel>(
           create: (_) => PasswordEntriesViewModel(
             passwordRepoService: passwordRepositoryService,
-            gpgSessionService: gpgSessionService, // Передаем GPGSessionService
+            gpgSessionService: gpgSessionService,
           ),
         ),
-        // AddEditProfileViewModel и AddEditPasswordEntryViewModel обычно создаются
-        // на своих экранах, так как они специфичны для контекста (редактирование конкретного элемента)
-        // и часто требуют параметры в конструкторе (например, ID редактируемого элемента).
       ],
       child: MaterialApp(
-        title: 'Password Manager', // Замените на ваше название
-        theme: ThemeData( // Настройте вашу тему
+        title: 'Password Manager',
+        theme: ThemeData(
           primarySwatch: Colors.blue,
-          // visualDensity: VisualDensity.adaptivePlatformDensity, // Для адаптивного UI
         ),
-        // Начальный экран вашего приложения
-        home: ProfileListScreen(), // Или другой начальный экран
-        // Вы можете определить именованные маршруты здесь для навигации
-        // routes: {
-        //   '/profileList': (context) => ProfileListScreen(),
-        //   '/passwordEntries': (context) => PasswordEntriesScreen(),
-        //   // Для экранов добавления/редактирования часто используется Navigator.push с передачей аргументов,
-        //   // а не именованные маршруты, так как им нужны данные.
-        // },
-        // onGenerateRoute можно использовать для более сложной логики маршрутизации,
-        // особенно если нужно передавать аргументы на экраны Add/Edit.
+        home: ProfileListScreen(),
         onGenerateRoute: (settings) {
-          // Логика для создания маршрутов, особенно для передачи аргументов
-          // Например, для AddEditProfileScreen:
           if (settings.name == AddEditProfileScreen.routeName) {
-            final args = settings.arguments as Map<String, dynamic>?; // Пример аргументов
+            final args = settings.arguments as Map<String, dynamic>?;
             return MaterialPageRoute(
               builder: (context) {
-                // AddEditProfileViewModel создается ЗДЕСЬ, получая зависимости из Provider
                 return ChangeNotifierProvider<AddEditProfileViewModel>(
                   create: (ctx) => AddEditProfileViewModel(
+                    secureGitAuth: Provider.of<SecureGitAuth>(ctx, listen: false),
                     passwordRepoService: Provider.of<PasswordRepositoryService>(ctx, listen: false),
                     gpgService: Provider.of<GPGService>(ctx, listen: false),
                     profileManager: Provider.of<RepositoryProfileManager>(ctx, listen: false),
@@ -165,9 +182,8 @@ class MyApp extends StatelessWidget {
               },
             );
           }
-          // Аналогично для AddEditPasswordEntryScreen
           if (settings.name == AddEditPasswordEntryScreen.routeName) {
-            final args = settings.arguments as Map<String, dynamic>; // Предполагаем, что аргументы всегда есть
+            final args = settings.arguments as Map<String, dynamic>;
             return MaterialPageRoute(
               builder: (context) {
                 return ChangeNotifierProvider<AddEditPasswordEntryViewModel>(
@@ -178,7 +194,6 @@ class MyApp extends StatelessWidget {
                     entryToEdit: args['entryToEdit'] as PasswordEntry?,
                   ),
                   child: AddEditPasswordEntryScreen(
-                    // Если экран принимает параметры напрямую, передайте их
                     profileId: args['profileId'] as String,
                     entryToEdit: args['entryToEdit'] as PasswordEntry?,
                   ),
