@@ -1,13 +1,13 @@
 // lib/ui/screens/profile_list_screen.dart
-import 'package:file_picker/file_picker.dart';
+import 'dart:async';
+
 import 'package:flutter/material.dart';
-import 'package:pass/ui/screens/password_list_screen.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/utils/enums.dart';
 import '../../models/password_repository_profile.dart';
-import '../../services/password_repository_service.dart';
+import '../view_models/profile_list_view_model.dart';
 import 'add_edit_profile_screen.dart'; // Или ваш выбранный state management
-// Импортируйте экран добавления профиля, когда он будет создан
 // import 'add_edit_profile_screen.dart';
 
 class ProfileListScreen extends StatefulWidget {
@@ -18,308 +18,271 @@ class ProfileListScreen extends StatefulWidget {
 }
 
 class _ProfileListScreenState extends State<ProfileListScreen> {
-  Future<String?> _showPassphraseDialog() async {
-    // Теперь context доступен из State (this.context)
-    if (!mounted) return null; // Проверка перед использованием context в showDialog
-    return await showDialog<String>(
-      context: context, // Используем this.context
-      builder: (BuildContext dialogContext) { // Используем новый dialogContext для билдера диалога
-        TextEditingController controller = TextEditingController();
-        return AlertDialog(
-          title: const Text('Enter passphrase'), // ... (заголовок)
-          content: TextField( // ... (содержимое)
-            controller: controller,
-            obscureText: true,
-            decoration: const InputDecoration(hintText: "Passphrase for GPG"),
-          ),
-          actions: <Widget>[ // ... (действия)
-            TextButton(
-              child: const Text('Cancel'),
-              onPressed: () => Navigator.of(dialogContext).pop(), // Используем dialogContext
-            ),
-            TextButton(
-              child: const Text('OK'),
-              onPressed: () => Navigator.of(dialogContext).pop(controller.text), // Используем dialogContext
-            ),
-          ],
-        );
-      },
-    );
+  late ProfileListViewModel _viewModel;
+  StreamSubscription? _navSubscription;
+  StreamSubscription? _infoSubscription;
+
+  @override
+  void initState() {
+    super.initState();
+    // ViewModel будет создан через Provider в build методе
   }
 
-  Future<bool?> _showDeleteConfirmationDialog(String profileName) async {
-    if (!mounted) return null;
-    return await showDialog<bool>(
-      context: context,
-      builder: (BuildContext dialogContext) {
-        return AlertDialog(
-          title: const Text('Sure?'),
-          content: Text('Are you sure you want to delete "$profileName"? All data and GPG keys will be lost!'),
-          actions: <Widget>[
-            TextButton(
-              child: const Text('Cancel'),
-              onPressed: () => Navigator.of(dialogContext).pop(false),
-            ),
-            TextButton(
-              style: TextButton.styleFrom(foregroundColor: Colors.red),
-              onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: const Text('Delete'),
-            ),
-          ],
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _viewModel = Provider.of<ProfileListViewModel>(context, listen: false); // Получаем VM
+    // listen:false потому что Consumer будет слушать изменения
+
+    _navSubscription?.cancel();
+    _navSubscription = _viewModel.navigationEvents.listen((event) {
+      if (!mounted) return;
+      if (event.destination == PasswordListNavigation.toAddProfile) {
+        Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => const AddEditProfileScreen(), // Передаем нужные параметры, если есть
+        )).then((_) => _viewModel.refreshProfiles()); // Обновляем список после возврата
+      } else if (event.destination == PasswordListNavigation.toEditProfile && event.profileToEdit != null) {
+        Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => AddEditProfileScreen(existingProfile: event.profileToEdit),
+        )).then((_) => _viewModel.refreshProfiles()); // Обновляем список после возврата
+      }
+      // else if (event.destination == ProfileListNavigation.toPasswordList) {
+      // TODO: Навигация на экран списка паролей для активного профиля
+      //   Navigator.of(context).push(MaterialPageRoute(builder: (_) => PasswordEntriesScreen()));
+      // }
+    });
+
+    _infoSubscription?.cancel();
+    _infoSubscription = _viewModel.infoMessages.listen((message) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message)),
         );
-      },
-    );
+      }
+    });
   }
 
-  void _showAddProfileSourceSelectionDialog(BuildContext context) {
+
+  @override
+  void dispose() {
+    _navSubscription?.cancel();
+    _infoSubscription?.cancel();
+    // ViewModel не dispose'ится здесь, если он предоставлен через Provider выше по дереву
+    // и его жизненный цикл дольше, чем у этого экрана.
+    // Если ViewModel создается специально для этого экрана и больше нигде не нужен,
+    // то можно было бы его здесь dispose'ить.
+    super.dispose();
+  }
+
+  void _showDeleteConfirmationDialog(PasswordRepositoryProfile profile) {
     showDialog(
       context: context,
-      builder: (BuildContext dialogContext) { // Важно использовать context из builder для Navigator.pop
-        return SimpleDialog(
-          title: const Text('Выберите источник хранилища'),
-          children: <Widget>[
-            SimpleDialogOption(
-              onPressed: () {
-                Navigator.pop(dialogContext); // Закрываем диалог
-                _navigateToOAuthFlow(context, PasswordSourceType.github); // Передаем context от ProfileListScreen
-              },
-              child: const ListTile(
-                leading: Icon(Icons.code), // Замените на иконку GitHub
-                title: Text('GitHub'),
-              ),
-            ),
-            SimpleDialogOption(
-              onPressed: () {
-                Navigator.pop(dialogContext);
-                _navigateToOAuthFlow(context, PasswordSourceType.gitlab);
-              },
-              child: const ListTile(
-                leading: Icon(Icons.code_off), // Замените на иконку GitLab
-                title: Text('GitLab'),
-              ),
-            ),
-            SimpleDialogOption(
-              onPressed: () {
-                Navigator.pop(dialogContext);
-                _pickLocalFolder(context);
-              },
-              child: const ListTile(
-                leading: Icon(Icons.folder_open),
-                title: Text('Локальная папка'),
-              ),
-            ),
-          ],
+      builder: (BuildContext dialogContext) {
+        bool deleteLocalData = true; // По умолчанию
+        return StatefulBuilder( // Для обновления чекбокса внутри диалога
+            builder: (context, setStateDialog) {
+              return AlertDialog(
+                title: Text('Удалить профиль "${profile.profileName}"?'),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Это действие необратимо.'),
+                    if (profile.isGitType() || profile.type == PasswordSourceType.localFolder)
+                      CheckboxListTile(
+                        title: const Text("Удалить локальные данные"),
+                        value: deleteLocalData,
+                        onChanged: (bool? value) {
+                          setStateDialog(() {
+                            deleteLocalData = value ?? true;
+                          });
+                        },
+                        controlAffinity: ListTileControlAffinity.leading,
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                  ],
+                ),
+                actions: <Widget>[
+                  TextButton(
+                    child: const Text('Отмена'),
+                    onPressed: () => Navigator.of(dialogContext).pop(),
+                  ),
+                  TextButton(
+                    style: TextButton.styleFrom(foregroundColor: Colors.red),
+                    child: const Text('Удалить'),
+                    onPressed: () async {
+                      Navigator.of(dialogContext).pop(); // Закрываем диалог
+                      await _viewModel.deleteProfile(profile.id, deleteLocalData: deleteLocalData);
+                      // Сообщение об успехе/ошибке придет через _infoSubscription или будет в _viewModel.errorMessage
+                    },
+                  ),
+                ],
+              );
+            }
         );
       },
     );
   }
 
-  void _navigateToOAuthFlow(BuildContext pageContext, PasswordSourceType type) async {
-    // Здесь будет логика OAuth 2.0
-    print('Запускаем OAuth для: ${type.name}');
-    // После успешного OAuth и выбора репозитория, мы получим URL репозитория и токен.
-    // Затем перейдем на AddEditProfileScreen с предзаполненными данными.
-
-    // --- ЭТО ЗАГЛУШКА ---
-    // В реальности здесь будет сложный асинхронный процесс
-    String? fakeRepoUrl;
-    Map<String, String>? fakeAuthTokens; // access_token, refresh_token
-
-    if (type == PasswordSourceType.github) {
-      // Имитация успешного OAuth
-      await Future.delayed(const Duration(seconds: 1)); // Имитация задержки сети
-      fakeRepoUrl = "https://github.com/user/test-repo.git";
-      fakeAuthTokens = {"access_token": "fake_github_access_token", "refresh_token": "fake_github_refresh_token"};
-      print('OAuth для GitHub ЗАВЕРШЕН (имитация). Репозиторий: $fakeRepoUrl');
-    } else if (type == PasswordSourceType.gitlab) {
-      await Future.delayed(const Duration(seconds: 1));
-      fakeRepoUrl = "https://gitlab.com/user/another-repo.git";
-      fakeAuthTokens = {"access_token": "fake_gitlab_access_token", "refresh_token": "fake_gitlab_refresh_token"};
-      print('OAuth для GitLab ЗАВЕРШЕН (имитация). Репозиторий: $fakeRepoUrl');
-    }
-
-    if (fakeRepoUrl != null && fakeAuthTokens != null) {
-      if (!pageContext.mounted) return;
-      // Переход на AddEditProfileScreen с предзаполненными данными
-      Navigator.push(
-        pageContext,
-        MaterialPageRoute(
-          builder: (context) => AddEditProfileScreen(
-            // Мы не передаем existingProfile, т.к. это новый профиль
-            initialSourceType: type,
-            initialRepoUrl: fakeRepoUrl,
-            initialAuthTokens: fakeAuthTokens,
-            // Можно также передать имя репозитория для предзаполнения имени профиля
-            // initialProfileName: "My ${type.name} Passwords",
+  void _showProfileActions(PasswordRepositoryProfile profile) {
+    showModalBottomSheet(
+      context: context,
+      builder: (BuildContext bc) {
+        return SafeArea(
+          child: Wrap(
+            children: <Widget>[
+              ListTile(
+                leading: const Icon(Icons.edit_outlined),
+                title: const Text('Редактировать'),
+                onTap: () {
+                  Navigator.of(context).pop(); // Закрыть bottom sheet
+                  _viewModel.navigateToEditProfile(profile);
+                },
+              ),
+              // if (profile.isGitType) // Опция синхронизации только для Git-типов
+              // ListTile(
+              //   leading: Icon(Icons.sync_outlined),
+              //   title: Text('Синхронизировать'),
+              //   onTap: () {
+              //     Navigator.of(context).pop();
+              //     // _viewModel.syncProfile(profile.id); // TODO: Реализовать
+              //      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Синхронизация для ${profile.profileName} еще не реализована')));
+              //   },
+              // ),
+              ListTile(
+                leading: const Icon(Icons.delete_outline, color: Colors.red),
+                title: const Text('Удалить', style: TextStyle(color: Colors.red)),
+                onTap: () {
+                  Navigator.of(context).pop(); // Закрыть bottom sheet
+                  _showDeleteConfirmationDialog(profile);
+                },
+              ),
+            ],
           ),
-        ),
-      ).then((value) {
-        if (value == true) { // Если AddEditProfileScreen вернул true (успешное сохранение)
-          // Обновите список профилей в ProfileListScreen
-          // Например, вызвав метод загрузки профилей
-          // _loadProfiles();
-        }
-      });
-    } else {
-      // Обработка ошибки OAuth или отмены пользователем
-      if (!pageContext.mounted) return;
-      ScaffoldMessenger.of(pageContext).showSnackBar(
-        SnackBar(content: Text('Не удалось подключиться к ${type.name} или процесс был отменен.')),
-      );
-    }
-  }
-
-  void _pickLocalFolder(BuildContext pageContext) async {
-    print('Выбираем локальную папку');
-    String? selectedDirectory;
-
-    // --- Используем file_picker для выбора директории ---
-    // Убедитесь, что `file_picker` добавлен в pubspec.yaml
-    // dependencies:
-    //   file_picker: ^latest_version
-    try {
-      selectedDirectory = await FilePicker.platform.getDirectoryPath(
-        dialogTitle: 'Выберите папку для хранения паролей',
-      );
-    } catch (e) {
-      print('Ошибка при выборе папки: $e');
-      if (!pageContext.mounted) return;
-      ScaffoldMessenger.of(pageContext).showSnackBar(
-        SnackBar(content: Text('Ошибка при выборе папки: $e')),
-      );
-      return;
-    }
-
-
-    if (selectedDirectory != null) {
-      print('Выбрана папка: $selectedDirectory');
-      if (!pageContext.mounted) return;
-      // Переход на AddEditProfileScreen с предзаполненными данными
-      Navigator.push(
-        pageContext,
-        MaterialPageRoute(
-          builder: (context) => AddEditProfileScreen(
-            initialSourceType: PasswordSourceType.localFolder,
-            initialRepoUrl: selectedDirectory, // Для LocalFolder URL это путь
-            // initialProfileName: "Мои локальные пароли",
-          ),
-        ),
-      ).then((value) {
-        if (value == true) {
-          // Обновите список профилей
-          // _loadProfiles();
-        }
-      });
-    } else {
-      // Пользователь отменил выбор папки
-      print('Выбор папки отменен');
-    }
+        );
+      },
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final passwordRepoService = Provider.of<PasswordRepositoryService>(context, listen: false);
-
     return Scaffold(
-      appBar: AppBar( actions: [
-        IconButton(
-          icon: const Icon(Icons.add),
-          tooltip: 'Add profile',
-          onPressed: () {
-            _showAddProfileSourceSelectionDialog(context);
-          },
-        ),
-      ]),
-      body: StreamBuilder<List<PasswordRepositoryProfile>>(
-        stream: passwordRepoService.profilesStream,
-        initialData: passwordRepoService.getProfiles(),
-        builder: (context, snapshot) {
-          // ... (логика StreamBuilder) ...
-          final profiles = snapshot.data!;
-          // ...
+      appBar: AppBar(
+        title: const Text('Профили Хранилищ'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            tooltip: 'Обновить список',
+            onPressed: () => _viewModel.refreshProfiles(),
+          ),
+        ],
+      ),
+      body: Consumer<ProfileListViewModel>( // Используем Consumer для перестройки UI
+        builder: (context, vm, child) {
+          if (vm.isLoading && vm.profiles.isEmpty) {
+            return const Center(child: CircularProgressIndicator());
+          }
 
-          return ListView.builder(
-            itemCount: profiles.length,
-            itemBuilder: (context, index) {
-              final profile = profiles[index];
-              // ...
-              return ListTile(
-                // ...
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
+          if (vm.errorMessage != null && vm.profiles.isEmpty) {
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    IconButton(
-                      icon: const Icon(Icons.settings_remote, color: Colors.blue),
-                      tooltip: 'Synchronize profile',
-                      onPressed: () async {
-                        // Сохраняем ссылку на ScaffoldMessenger ДО await
-                        final scaffoldMessenger = ScaffoldMessenger.of(this.context); // Используем this.context из State
-                        String? passphrase;
-                        if (profile.type != PasswordSourceType.localFolder) {
-                          passphrase = await _showPassphraseDialog(); // Вызываем метод стейта
-                          if (passphrase == null) return;
-                        }
-                        try {
-                          await passwordRepoService.syncRepository(profile.id, passphrase ?? "");
-                          if (!mounted) return; // Проверка после await
-                          scaffoldMessenger.showSnackBar(
-                            SnackBar(content: Text('Profile ${profile.profileName} synchronized')),
-                          );
-                        } catch (e) {
-                          if (!mounted) return; // Проверка после await
-                          scaffoldMessenger.showSnackBar(
-                            SnackBar(content: Text('Synchronization error: $e'), backgroundColor: Colors.red),
-                          );
-                        }
-                      },
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.delete, color: Colors.red),
-                      tooltip: 'Delete profile',
-                      onPressed: () async {
-                        final scaffoldMessenger = ScaffoldMessenger.of(this.context);
-                        final confirmed = await _showDeleteConfirmationDialog(profile.profileName);
-                        if (confirmed == true) {
-                          try {
-                            await passwordRepoService.removeRepository(profile.id);
-                            if (!mounted) return;
-                            scaffoldMessenger.showSnackBar(
-                              SnackBar(content: Text('Profile ${profile.profileName} deleted')),
-                            );
-                          } catch (e) {
-                            if (!mounted) return;
-                            scaffoldMessenger.showSnackBar(
-                              SnackBar(content: Text('Error deleting profile: $e'), backgroundColor: Colors.red),
-                            );
-                          }
-                        }
-                      },
-                    ),
+                    Text('Ошибка: ${vm.errorMessage}', style: const TextStyle(color: Colors.red), textAlign: TextAlign.center),
+                    const SizedBox(height: 10),
+                    ElevatedButton(onPressed: () => vm.refreshProfiles(), child: const Text('Попробовать снова'))
                   ],
                 ),
-                onTap: () async {
-                  final passwordRepoService = Provider.of<PasswordRepositoryService>(context, listen: false);
-                  final bool alreadyActive = passwordRepoService.getActiveProfile()?.id == profile.id;
-                  if (!alreadyActive) {
-                    await passwordRepoService.setActiveProfile(profile.id);
-                  }
+              ),
+            );
+          }
 
-                  String? gpgPassphrase;
+          if (vm.profiles.isEmpty) {
+            return Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Text('Профили не найдены.', style: TextStyle(fontSize: 18)),
+                  const SizedBox(height: 8),
+                  const Text('Нажмите "+", чтобы добавить новый профиль.'),
+                  const SizedBox(height: 20),
+                  ElevatedButton.icon(
+                    icon: const Icon(Icons.add),
+                    label: const Text("Добавить профиль"),
+                    onPressed: () => vm.navigateToAddProfile(),
+                  )
+                ],
+              ),
+            );
+          }
 
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => PasswordListScreen(profileId: profile.id),
-                    ),
-                  );
-                  // Для setActiveProfile обычно не нужен context после await,
-                  // так как StreamBuilder сам перерисуется.
-                  // Но если бы тут была навигация, то понадобилась бы проверка mounted.
-                  // ...
-                },
+          return ListView.builder(
+            itemCount: vm.profiles.length,
+            itemBuilder: (context, index) {
+              final profile = vm.profiles[index];
+              final bool isActive = vm.activeProfileId == profile.id;
+
+              IconData typeIcon;
+              switch (profile.type) {
+                case PasswordSourceType.github:
+                  typeIcon = Icons.code; // TODO: Найти подходящую иконку GitHub
+                  break;
+                case PasswordSourceType.gitlab:
+                  typeIcon = Icons.code_off; // TODO: Найти подходящую иконку GitLab
+                  break;
+                case PasswordSourceType.localFolder:
+                  typeIcon = Icons.folder_outlined;
+                  break;
+                default:
+                  typeIcon = Icons.storage_outlined;
+              }
+
+              return Card(
+                elevation: isActive ? 4.0 : 1.0,
+                shape: isActive
+                    ? RoundedRectangleBorder(
+                  side: BorderSide(color: Theme.of(context).primaryColor, width: 2),
+                  borderRadius: BorderRadius.circular(8),
+                )
+                    : RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                child: ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: isActive ? Theme.of(context).primaryColor.withAlpha(51) : Colors.grey.shade200,
+                    child: Icon(typeIcon, color: isActive ? Theme.of(context).primaryColor : Colors.grey.shade700),
+                  ),
+                  title: Text(profile.profileName, style: const TextStyle(fontWeight: FontWeight.bold)),
+                  subtitle: Text(
+                    profile.isGitType()
+                        ? (profile.repositoryCloneUrl ?? profile.repositoryFullName)
+                        : profile.repositoryFullName,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.more_vert_outlined),
+                    tooltip: 'Действия',
+                    onPressed: () => _showProfileActions(profile),
+                  ),
+                  onTap: () {
+                    // При нажатии делаем профиль активным
+                    // И в будущем можно сразу переходить к списку паролей этого профиля
+                    vm.setActiveProfile(profile.id);
+                  },
+                  onLongPress: () => _showProfileActions(profile),
+                  selected: isActive,
+                  selectedTileColor: Theme.of(context).primaryColor.withAlpha(13),
+                ),
               );
             },
           );
         },
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () => _viewModel.navigateToAddProfile(),
+        tooltip: 'Добавить профиль',
+        child: const Icon(Icons.add),
       ),
     );
   }

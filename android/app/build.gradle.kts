@@ -28,7 +28,7 @@ android {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
 
-        manifestPlaceholders["appAuthRedirectScheme"] = "myapp"
+        manifestPlaceholders["appAuthRedirectScheme"] = "passapp"
     }
 
     buildTypes {

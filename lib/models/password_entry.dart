@@ -3,19 +3,17 @@ import 'package:uuid/uuid.dart';
 // lib/models/password_entry.dart
 
 class PasswordEntry {
-  final String id; // Может быть равен entryName + folderPath
-  final String entryName; // Имя файла (без .gpg и пути)
-  final String folderPath; // Относительный путь к папке, пустой для корня
-  String password; // Сам пароль (первая строка в файле)
-  Map<String, String> metadata; // Остальные данные как ключ-значение
-  // Общие поля, которые можно извлечь из metadata или установить по умолчанию
+  final String id; // uuid
+  final String entryName; // file name
+  final String folderPath; // folder path, empty for root
+  String password; // password (first line in file)
+  Map<String, String> metadata;
+  String get name => entryName;
+  String get path => fullPath;
   String? get url => metadata['url'] ?? metadata['URL'];
   String? get username => metadata['username'] ?? metadata['user'] ?? metadata['login'];
   String? get notes => metadata['notes'] ?? metadata['comment'];
-  // Даты можно хранить в metadata или генерировать при чтении/записи файла
-  // Для простоты пока не будем их строго парсить из метаданных, а использовать время файла.
-  // Если они важны, можно добавить ключи типа 'createdAt', 'updatedAt' в metadata.
-  DateTime lastModified; // Время последней модификации файла, используется вместо createdAt/updatedAt
+  DateTime lastModified;
 
   PasswordEntry({
     String? id,
@@ -24,63 +22,56 @@ class PasswordEntry {
     required this.password,
     Map<String, String>? metadata,
     required this.lastModified,
-  })  : id = id ?? const Uuid().v4(), // Или лучше использовать fullPath как ID
+  })  : id = id ?? const Uuid().v4(),
         metadata = metadata ?? {};
 
   String get fullPath => folderPath.isEmpty ? entryName : '$folderPath/$entryName';
 
-  /// Конвертирует PasswordEntry в строку для сохранения в .gpg файл (перед шифрованием)
   String toPassFileContent() {
     final buffer = StringBuffer();
-    buffer.writeln(password); // Пароль на первой строке
+    buffer.writeln(password);
 
-    // Добавляем остальные метаданные, если они есть
     metadata.forEach((key, value) {
-      // Пропускаем "стандартные" поля, если они уже были извлечены,
-      // или убедимся, что они не дублируются, если это нежелательно.
-      // Здесь для простоты просто записываем все из metadata.
-      if (value.isNotEmpty) { // Не записываем пустые значения
+      if (value.isNotEmpty) {
         buffer.writeln('$key: $value');
       }
     });
-    return buffer.toString().trim(); // trim, чтобы убрать лишнюю последнюю пустую строку
+    return buffer.toString().trim();
   }
 
-  /// Создает PasswordEntry из расшифрованного содержимого .gpg файла
   factory PasswordEntry.fromPassFileContent(
       String decryptedContent,
       String entryNameFromFile,
       String folderPathFromFile,
       DateTime fileLastModified,
       ) {
-    final lines = decryptedContent.split('\n');
-    if (lines.isEmpty) {
+    if (decryptedContent.isEmpty) {
       throw const FormatException("Decrypted GPG content is empty.");
     }
+    final lines = decryptedContent.split('\n');
 
-    final String pass = lines.first;
+
+    final String pass = lines.first.trim();
     final Map<String, String> meta = {};
 
     if (lines.length > 1) {
       for (int i = 1; i < lines.length; i++) {
         final line = lines[i].trim();
-        if (line.isEmpty) continue; // Пропускаем пустые строки
+        if (line.isEmpty) continue;
 
         final parts = line.split(':');
         if (parts.length >= 2) {
           final key = parts.first.trim();
-          final value = parts.sublist(1).join(':').trim(); // Все после первого ':'
+          final value = parts.sublist(1).join(':').trim();
           meta[key] = value;
         } else {
-          // Строка не в формате ключ:значение, можно ее добавить в "notes" или специальное поле
-          meta['line_$i'] = line; // или проигнорировать
+          meta['line_$i'] = line;
         }
       }
     }
 
     return PasswordEntry(
-      // id: '$folderPathFromFile/$entryNameFromFile'.replaceAll(RegExp(r'[/\\]+'), '/'), // Нормализуем ID
-      id: const Uuid().v4(), // Или используйте более детерминированный ID, если нужно
+      id: const Uuid().v4(),
       entryName: entryNameFromFile,
       folderPath: folderPathFromFile,
       password: pass,
@@ -89,7 +80,6 @@ class PasswordEntry {
     );
   }
 
-  // Обновление специфичных полей (пример)
   void updateUrl(String? newUrl) {
     if (newUrl == null || newUrl.isEmpty) {
       metadata.remove('url');
@@ -117,7 +107,6 @@ class PasswordEntry {
     }
   }
 
-  // Для создания копии с изменениями (если нужно)
   PasswordEntry copyWith({
     String? id,
     String? entryName,
@@ -131,7 +120,7 @@ class PasswordEntry {
       entryName: entryName ?? this.entryName,
       folderPath: folderPath ?? this.folderPath,
       password: password ?? this.password,
-      metadata: metadata ?? Map.from(this.metadata), // Глубокое копирование карты
+      metadata: metadata ?? Map.from(this.metadata),
       lastModified: lastModified ?? this.lastModified,
     );
   }

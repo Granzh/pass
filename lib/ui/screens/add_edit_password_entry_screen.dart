@@ -1,385 +1,432 @@
-// lib/ui/screens/add_edit_password_entry_screen.dart
 import 'package:flutter/material.dart';
+import 'package:logging/logging.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/utils/enums.dart';
 import '../../models/password_entry.dart';
-import '../../services/password_repository_service.dart';
+import '../view_models/add_edit_password_entry_view_model.dart';
 
 class AddEditPasswordEntryScreen extends StatefulWidget {
   final String profileId;
-  final String gpgPassphrase; // Необходима для шифрования при сохранении
-  final PasswordEntry? existingEntry; // Если null, то это добавление новой записи
+  final PasswordEntry? entryToEdit; // null для режима добавления
 
   const AddEditPasswordEntryScreen({
     super.key,
     required this.profileId,
-    required this.gpgPassphrase,
-    this.existingEntry,
+    this.entryToEdit,
   });
 
-  bool get isEditing => existingEntry != null;
+  static const String routeName = '/add-edit-password-entry';
 
   @override
-  State<AddEditPasswordEntryScreen> createState() => _AddEditPasswordEntryScreenState();
+  State<AddEditPasswordEntryScreen> createState() =>
+      _AddEditPasswordEntryScreenState();
 }
 
-class _AddEditPasswordEntryScreenState extends State<AddEditPasswordEntryScreen> {
+class _AddEditPasswordEntryScreenState
+    extends State<AddEditPasswordEntryScreen> {
+  static final _log = Logger('AddEditPasswordEntryScreen');
   final _formKey = GlobalKey<FormState>();
-  late PasswordRepositoryService _passwordRepoService;
 
   // Контроллеры для текстовых полей
   late TextEditingController _entryNameController;
+  late TextEditingController _folderPathController;
   late TextEditingController _passwordController;
-  late TextEditingController _usernameController;
   late TextEditingController _urlController;
+  late TextEditingController _usernameController;
   late TextEditingController _notesController;
-  late TextEditingController _customFieldsController; // Для дополнительных полей
 
-  bool _isLoading = false;
-  bool _generatePassword = true; // Флаг для автогенерации пароля при добавлении
-  bool _obscurePassword = true;
+  // Для кастомных метаданных будем управлять списком контроллеров
+  final List<TextEditingController> _customMetaKeyControllers = [];
+  final List<TextEditingController> _customMetaValueControllers = [];
+
+  late AddEditPasswordEntryViewModel _viewModel;
+  bool _isPasswordVisible = false;
+  String? _cachedGpgPassphrase; // Для временного хранения парольной фразы
 
   @override
   void initState() {
     super.initState();
-    _passwordRepoService = Provider.of<PasswordRepositoryService>(context, listen: false);
 
-    String initialEntryNameOrFullPath = widget.existingEntry?.fullPath ?? '';
+    _viewModel = Provider.of<AddEditPasswordEntryViewModel>(context, listen: false);
 
-    _entryNameController = TextEditingController(text: initialEntryNameOrFullPath);
-    _passwordController = TextEditingController(text: widget.existingEntry?.password ?? '');
-    _usernameController = TextEditingController(text: widget.existingEntry?.username ?? '');
-    _urlController = TextEditingController(text: widget.existingEntry?.url ?? '');
-    _notesController = TextEditingController(text: widget.existingEntry?.notes ?? '');
+    _entryNameController = TextEditingController(text: _viewModel.entryName);
+    _folderPathController = TextEditingController(text: _viewModel.folderPath);
+    _passwordController = TextEditingController(text: _viewModel.password);
+    _urlController = TextEditingController(text: _viewModel.url);
+    _usernameController = TextEditingController(text: _viewModel.username);
+    _notesController = TextEditingController(text: _viewModel.notes);
 
-    // Собираем кастомные поля в одну строку для простоты редактирования
-    // При сохранении нужно будет их распарсить обратно в Map
-    final customMeta = Map<String, String>.from(widget.existingEntry?.metadata ?? {});
-    customMeta.removeWhere((key, value) => ['username', 'user', 'login', 'url', 'URL', 'notes', 'comment'].contains(key));
-
-    final customFieldsText = customMeta.entries
-        .map((entry) => '${entry.key}: ${entry.value}')
-        .join('\n');
-    _customFieldsController = TextEditingController(text: customFieldsText);
-
-
-
-    if (widget.isEditing && _passwordController.text.isNotEmpty) {
-      _generatePassword = false; // Не генерируем пароль, если он уже есть при редактировании
-    } else if (!widget.isEditing) {
-      // Если это новая запись и мы хотим автогенерацию
-      _generateAndSetPassword();
-    }
-  }
-
-  void _generateAndSetPassword() {
-    if (_generatePassword) {
-      // Простая генерация пароля (можно заменить на более сложный генератор)
-      final newPassword = _passwordRepoService.generateRandomPassword(); // Предполагаем, что такой метод есть в сервисе
-      _passwordController.text = newPassword;
-    }
-  }
-
-  Map<String, String> _parseCustomFields() {
-    final Map<String, String> fields = {};
-    final lines = _customFieldsController.text.split('\n');
-    for (final line in lines) {
-      final parts = line.split(':');
-      if (parts.length >= 2) {
-        final key = parts[0].trim();
-        final value = parts.sublist(1).join(':').trim(); // На случай если в значении есть ':'
-        if (key.isNotEmpty) {
-          fields[key] = value;
-        }
-      }
-    }
-    return fields;
-  }
-
-  Future<void> _saveEntry() async {
-    if (!_formKey.currentState!.validate()) {
-      return;
-    }
-    _formKey.currentState!.save();
-
-    setState(() {
-      _isLoading = true;
+    // Инициализация контроллеров для существующих кастомных метаданных
+    _viewModel.customMetadata.forEach((key, value) {
+      _customMetaKeyControllers.add(TextEditingController(text: key));
+      _customMetaValueControllers.add(TextEditingController(text: value));
     });
 
-    // Извлечение имени файла и пути из контроллера _entryNameController
-    final String fullPathInput = _entryNameController.text.trim();
-    String entryNameFinal;
-    String folderPathFinal;
+    // Подписываемся на изменения в ViewModel, чтобы обновлять контроллеры, если нужно
+    // (например, после генерации пароля)
+    _viewModel.addListener(_onViewModelChanged);
 
-    if (fullPathInput.contains('/')) {
-      entryNameFinal = fullPathInput.substring(fullPathInput.lastIndexOf('/') + 1);
-      folderPathFinal = fullPathInput.substring(0, fullPathInput.lastIndexOf('/'));
-    } else {
-      entryNameFinal = fullPathInput;
-      folderPathFinal = '';
-    }
-
-    // Проверка, что entryNameFinal не пустой после извлечения
-    if (entryNameFinal.isEmpty) {
-      setState(() { _isLoading = false; });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Entry name cannot be empty or end with "/"'), backgroundColor: Colors.red),
-      );
-      return;
-    }
-
-
-    // Формируем metadata
-    final Map<String, String> metadataToSave = {};
-    if (_usernameController.text.trim().isNotEmpty) {
-      metadataToSave['username'] = _usernameController.text.trim(); // Сохраняем как 'username'
-    }
-    if (_urlController.text.trim().isNotEmpty) {
-      metadataToSave['url'] = _urlController.text.trim();
-    }
-    if (_notesController.text.trim().isNotEmpty) {
-      metadataToSave['notes'] = _notesController.text.trim();
-    }
-
-    // Добавляем кастомные поля из _customFieldsController
-    final customFieldsLines = _customFieldsController.text.split('\n');
-    for (final line in customFieldsLines) {
-      final parts = line.split(':');
-      if (parts.length >= 2) {
-        final key = parts[0].trim();
-        final value = parts.sublist(1).join(':').trim();
-        if (key.isNotEmpty && !metadataToSave.containsKey(key)) { // Не перезаписываем стандартные ключи, если они уже есть
-          metadataToSave[key] = value;
-        }
+    // Подписываемся на навигационные события
+    _viewModel.navigationEvents.listen((event) {
+      if (!mounted) return;
+      if (event == AddEditEntryNavigation.backToList) {
+        Navigator.of(context).pop();
       }
-    }
-
-    final PasswordEntry entryToSave = PasswordEntry(
-      // id будет сгенерирован в конструкторе PasswordEntry, если не предоставлен
-      entryName: entryNameFinal,
-      folderPath: folderPathFinal,
-      password: _passwordController.text,
-      metadata: metadataToSave,
-      lastModified: widget.existingEntry?.lastModified ?? DateTime.now(), // Для новой записи ставим DateTime.now()
-      // Для существующей можно взять старое значение,
-      // или DateTime.now() если хотим обновить время изменения
-      // Файловая система сама обновит время файла при записи.
-      // Передача DateTime.now() здесь в основном для консистентности объекта,
-      // но реальное lastModified файла будет установлено при сохранении.
-      // Можно и вовсе не передавать, если сервис сам обработает.
-      // Но конструктор требует.
-    );
-
-
-    final scaffoldMessenger = ScaffoldMessenger.of(context);
-    final navigator = Navigator.of(context);
-
-    try {
-      await _passwordRepoService.savePasswordEntry(
-        profileId: widget.profileId,
-        entry: entryToSave,
-        userGpgPassphrase: widget.gpgPassphrase,
-      );
-      if (!mounted) return;
-      scaffoldMessenger.showSnackBar(
-        SnackBar(content: Text('Entry "${entryToSave.fullPath}" ${widget.isEditing ? "updated" : "saved"}')),
-      );
-      navigator.pop(true);
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _isLoading = false;
-      });
-      scaffoldMessenger.showSnackBar(
-        SnackBar(content: Text('Error saving entry: $e'), backgroundColor: Colors.red),
-      );
-    }
-  }
-
-  Future<void> _deleteEntry() async {
-    if (!widget.isEditing || widget.existingEntry == null) return;
-
-    if (!mounted) return;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Confirm deletion'),
-        content: Text('Are you sure you want to delete "${widget.existingEntry!.fullPath}"?'),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Delete', style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed != true) return;
-
-    if (!mounted) return;
-
-    final scaffoldMessenger = ScaffoldMessenger.of(context);
-    final navigator = Navigator.of(context);
-
-    setState(() {
-      _isLoading = true;
+    }).onError((error, stackTrace) {
+      _log.warning("Error in navigation stream", error, stackTrace);
     });
 
-    try {
-      await _passwordRepoService.deletePasswordEntry(
-        profileId: widget.profileId,
-        entryName: widget.existingEntry!.entryName,
-        folderPath: widget.existingEntry!.folderPath,
-        // userGpgPassphrase для удаления не всегда нужна, но может быть для git commit/push
-      );
-      if (!mounted) return;
-      scaffoldMessenger.showSnackBar(
-        SnackBar(content: Text('Entry "${widget.existingEntry!.fullPath}" deleted')),
-      );
-      navigator.pop(true); // Возвращаем true, чтобы предыдущий экран обновил список
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _isLoading = false;
-      });
-      scaffoldMessenger.showSnackBar(
-        SnackBar(content: Text('Error deleting entry: $e'), backgroundColor: Colors.red),
-      );
-    }
+    // TODO: Подумать, как получить/запросить _cachedGpgPassphrase, если он нужен для сохранения
+    // Например, если он был введен на предыдущем экране и сохранен в каком-то общем сервисе
+    // final activeProfileService = Provider.of<ActiveProfileService>(context, listen: false);
+    // _cachedGpgPassphrase = activeProfileService.getCachedPassphrase();
   }
 
+  void _onViewModelChanged() {
+    if (!mounted) return;
+    // Обновляем контроллеры, если ViewModel изменила соответствующие поля
+    // Это важно, например, для поля пароля после генерации
+    if (_passwordController.text != _viewModel.password) {
+      _passwordController.text = _viewModel.password;
+    }
+    // Можно добавить обновления для других полей, если ViewModel их меняет программно
+
+    // Обновление UI для кастомных метаданных, если они изменились в ViewModel
+    // (например, если бы ViewModel могла добавлять/удалять их программно)
+    // Этот сценарий более сложен и требует синхронизации списков контроллеров
+    // с `_viewModel.customMetadata`. Пока что будем полагаться на `setState` при
+    // добавлении/удалении поля в UI.
+  }
 
   @override
   void dispose() {
+    _viewModel.removeListener(_onViewModelChanged);
     _entryNameController.dispose();
+    _folderPathController.dispose();
     _passwordController.dispose();
-    _usernameController.dispose();
     _urlController.dispose();
+    _usernameController.dispose();
     _notesController.dispose();
-    _customFieldsController.dispose();
+    for (var controller in _customMetaKeyControllers) {
+      controller.dispose();
+    }
+    for (var controller in _customMetaValueControllers) {
+      controller.dispose();
+    }
     super.dispose();
+  }
+
+  Future<void> _saveEntry() async {
+    if (_formKey.currentState?.validate() ?? false) {
+      _formKey.currentState?.save(); // Вызовет onSaved у TextFormField
+
+      // Обновляем ViewModel из контроллеров перед сохранением
+      _viewModel.updateEntryName(_entryNameController.text);
+      _viewModel.updateFolderPath(_folderPathController.text);
+      _viewModel.updatePassword(_passwordController.text);
+      _viewModel.updateUrl(_urlController.text);
+      _viewModel.updateUsername(_usernameController.text);
+      _viewModel.updateNotes(_notesController.text);
+
+      // Обновляем кастомные метаданные в ViewModel
+      // Сначала очистим старые, потом добавим текущие из контроллеров
+      // (Это упрощенный подход; более надежно было бы сравнивать и обновлять)
+      _viewModel.customMetadata.keys.toList().forEach(_viewModel.removeCustomMetadataField);
+      for (int i = 0; i < _customMetaKeyControllers.length; i++) {
+        final key = _customMetaKeyControllers[i].text;
+        final value = _customMetaValueControllers[i].text;
+        if (key.isNotEmpty) {
+          _viewModel.addCustomMetadataField(key, value);
+        }
+      }
+
+      // --- ОБРАБОТКА GPG PASSPHRASE ---
+      String? gpgPassphrase = _cachedGpgPassphrase;
+      if (gpgPassphrase == null) {
+        // Запросить парольную фразу у пользователя
+        gpgPassphrase = await _showGpgPassphraseDialog();
+        if (gpgPassphrase == null || gpgPassphrase.isEmpty) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('GPG passphrase is required to save.')),
+            );
+          }
+          return; // Не сохранять без парольной фразы
+        }
+        // Можно кэшировать для последующих быстрых сохранений на этом экране, если нужно
+        // _cachedGpgPassphrase = gpgPassphrase;
+      }
+
+      await _viewModel.saveEntry(userGpgPassphrase: gpgPassphrase);
+
+      // Ошибки будут отображены через Consumer<AddEditPasswordEntryViewModel>
+      // и навигация произойдет через _viewModel.navigationEvents.listen
+    } else {
+      _log.info("Form validation failed.");
+      // Можно показать SnackBar, что форма невалидна
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please correct the errors in the form.')),
+      );
+    }
+  }
+
+  Future<String?> _showGpgPassphraseDialog() async {
+    final passphraseController = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text('GPG Passphrase Required'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Please enter the GPG passphrase for the current profile to save the entry.'),
+              const SizedBox(height: 16),
+              TextField(
+                controller: passphraseController,
+                obscureText: true,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  labelText: 'GPG Passphrase',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ),
+          actions: <Widget>[
+            TextButton(
+              child: const Text('Cancel'),
+              onPressed: () {
+                Navigator.of(dialogContext).pop(); // Возвращает null
+              },
+            ),
+            ElevatedButton(
+              child: const Text('Confirm'),
+              onPressed: () {
+                Navigator.of(dialogContext).pop(passphraseController.text);
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _addCustomMetadataField() {
+    setState(() {
+      _customMetaKeyControllers.add(TextEditingController());
+      _customMetaValueControllers.add(TextEditingController());
+    });
+  }
+
+  void _removeCustomMetadataField(int index) {
+    setState(() {
+      _customMetaKeyControllers[index].dispose();
+      _customMetaValueControllers[index].dispose();
+      _customMetaKeyControllers.removeAt(index);
+      _customMetaValueControllers.removeAt(index);
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.isEditing ? 'Редактировать Запись' : 'Добавить Запись'),
+        title: Text(widget.entryToEdit == null ? 'Add New Entry' : 'Edit Entry'),
         actions: [
-          if (widget.isEditing)
-            IconButton(
-              icon: const Icon(Icons.delete_outline),
-              tooltip: 'Удалить запись',
-              onPressed: _isLoading ? null : _deleteEntry,
-            ),
           IconButton(
-            icon: const Icon(Icons.save_outlined),
-            tooltip: 'Сохранить',
-            onPressed: _isLoading ? null : _saveEntry,
+            icon: const Icon(Icons.save),
+            tooltip: 'Save Entry',
+            onPressed: _viewModel.isLoading ? null : _saveEntry,
           ),
         ],
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : SingleChildScrollView(
-        padding: const EdgeInsets.all(16.0),
-        child: Form(
-          key: _formKey,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              TextFormField(
-                controller: _entryNameController,
-                // ВАЖНО: Теперь это поле для ПОЛНОГО ПУТИ к записи
-                decoration: const InputDecoration(labelText: 'Путь к записи', hintText: 'например, services/email/gmail или work/project_a/server_key'),
-                validator: (value) {
-                  if (value == null || value.trim().isEmpty) {
-                    return 'Путь к записи не может быть пустым';
-                  }
-                  if (value.trim().endsWith('/')) {
-                    return 'Путь не должен заканчиваться на "/"';
-                  }
-                  if (value.endsWith('.gpg')) {
-                    return 'Не указывайте расширение .gpg';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 12),
-              if (!widget.isEditing)
-                CheckboxListTile(
-                  title: const Text('Сгенерировать пароль'),
-                  value: _generatePassword,
-                  onChanged: (bool? value) {
-                    setState(() {
-                      _generatePassword = value ?? false;
-                      if (_generatePassword) {
-                        _generateAndSetPassword();
-                      } else if (!widget.isEditing) {
-                        _passwordController.clear();
-                      }
-                    });
-                  },
-                  controlAffinity: ListTileControlAffinity.leading,
-                  contentPadding: EdgeInsets.zero,
-                ),
-              TextFormField(
-                controller: _passwordController,
-                decoration: InputDecoration(
-                  labelText: 'Пароль',
-                  suffixIcon: IconButton(
-                    icon: Icon(_obscurePassword ? Icons.visibility_off_outlined : Icons.visibility_outlined),
-                    onPressed: () {
-                      setState(() { _obscurePassword = !_obscurePassword; });
-                    },
+      body: Consumer<AddEditPasswordEntryViewModel>(
+        builder: (context, viewModel, child) {
+          // Если есть глобальная ошибка от ViewModel (например, ошибка сохранения)
+          if (viewModel.errorMessage != null && !viewModel.isLoading) {
+            // Показываем SnackBar с ошибкой асинхронно, чтобы не вызвать ошибку build
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) { // Дополнительная проверка
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(viewModel.errorMessage!),
+                    backgroundColor: Colors.red,
+                  ),
+                );
+                // Сбрасываем ошибку в ViewModel после показа, чтобы она не висела
+                viewModel.clearErrorMessage(); // Вам нужно будет добавить этот метод в ViewModel
+              }
+            });
+          }
+
+          return Stack(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Form(
+                  key: _formKey,
+                  child: ListView( // Используем ListView для прокрутки, если форма длинная
+                    children: <Widget>[
+                      // --- Entry Name ---
+                      TextFormField(
+                        controller: _entryNameController,
+                        decoration: const InputDecoration(labelText: 'Entry Name (e.g., website/service)'),
+                        validator: viewModel.validateEntryName,
+                        onChanged: (value) => viewModel.updateEntryName(value), // Для "живой" валидации, если нужно
+                      ),
+                      const SizedBox(height: 16),
+
+                      // --- Folder Path (Optional) ---
+                      TextFormField(
+                        controller: _folderPathController,
+                        decoration: const InputDecoration(
+                          labelText: 'Folder Path (optional, e.g., work/email)',
+                          hintText: 'Leave empty for root',
+                        ),
+                        onChanged: (value) => viewModel.updateFolderPath(value),
+                      ),
+                      const SizedBox(height: 16),
+
+                      // --- Password ---
+                      TextFormField(
+                        controller: _passwordController,
+                        decoration: InputDecoration(
+                          labelText: 'Password',
+                          suffixIcon: Row(
+                            mainAxisSize: MainAxisSize.min, // Чтобы Row не занимал всю ширину
+                            children: [
+                              IconButton(
+                                icon: Icon(
+                                  _isPasswordVisible
+                                      ? Icons.visibility_off
+                                      : Icons.visibility,
+                                ),
+                                onPressed: () {
+                                  setState(() {
+                                    _isPasswordVisible = !_isPasswordVisible;
+                                  });
+                                },
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.autorenew), // Иконка для генерации
+                                tooltip: 'Generate Password',
+                                onPressed: () {
+                                  // Можно показать диалог для настройки параметров генерации
+                                  viewModel.generateNewPassword();
+                                  // _passwordController.text = viewModel.password; // Обновится через _onViewModelChanged
+                                },
+                              ),
+                            ],
+                          ),
+                        ),
+                        obscureText: !_isPasswordVisible,
+                        validator: viewModel.validatePassword,
+                        onChanged: (value) => viewModel.updatePassword(value),
+                      ),
+                      const SizedBox(height: 16),
+
+                      // --- URL (Optional) ---
+                      TextFormField(
+                        controller: _urlController,
+                        decoration: const InputDecoration(labelText: 'URL (optional)'),
+                        keyboardType: TextInputType.url,
+                        validator: viewModel.validateUrl,
+                        onChanged: (value) => viewModel.updateUrl(value),
+                      ),
+                      const SizedBox(height: 16),
+
+                      // --- Username (Optional) ---
+                      TextFormField(
+                        controller: _usernameController,
+                        decoration: const InputDecoration(labelText: 'Username/Login (optional)'),
+                        onChanged: (value) => viewModel.updateUsername(value),
+                      ),
+                      const SizedBox(height: 16),
+
+                      // --- Notes (Optional) ---
+                      TextFormField(
+                        controller: _notesController,
+                        decoration: const InputDecoration(
+                          labelText: 'Notes (optional)',
+                          alignLabelWithHint: true, // Для лучшего вида с многострочным полем
+                        ),
+                        maxLines: 3,
+                        minLines: 1,
+                        onChanged: (value) => viewModel.updateNotes(value),
+                      ),
+                      const SizedBox(height: 24),
+
+                      // --- Custom Metadata ---
+                      Text('Custom Fields', style: Theme.of(context).textTheme.titleMedium),
+                      const SizedBox(height: 8),
+                      if (_customMetaKeyControllers.isEmpty)
+                        const Text('No custom fields yet. Tap + to add.', style: TextStyle(color: Colors.grey)),
+                      ListView.builder(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(), // Отключаем скролл вложенного ListView
+                        itemCount: _customMetaKeyControllers.length,
+                        itemBuilder: (context, index) {
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 8.0),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: TextFormField(
+                                    controller: _customMetaKeyControllers[index],
+                                    decoration: InputDecoration(labelText: 'Field ${index + 1} Name'),
+                                    // validator: (value) => (value == null || value.isEmpty) ? 'Key cannot be empty' : null,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: TextFormField(
+                                    controller: _customMetaValueControllers[index],
+                                    decoration: InputDecoration(labelText: 'Field ${index + 1} Value'),
+                                  ),
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.remove_circle_outline, color: Colors.red),
+                                  onPressed: () => _removeCustomMetadataField(index),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TextButton.icon(
+                          icon: const Icon(Icons.add),
+                          label: const Text('Add Custom Field'),
+                          onPressed: _addCustomMetadataField,
+                        ),
+                      ),
+                      const SizedBox(height: 70), // Отступ для FAB, если он будет
+                    ],
                   ),
                 ),
-                obscureText: _obscurePassword,
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Пароль не может быть пустым';
-                  }
-                  return null;
-                },
-                readOnly: _generatePassword && !widget.isEditing,
               ),
-              if (_generatePassword && !widget.isEditing)
-                TextButton.icon(
-                  icon: const Icon(Icons.refresh, size: 18),
-                  label: const Text('Сгенерировать другой'),
-                  onPressed: _generateAndSetPassword,
+              // --- Индикатор загрузки ---
+              if (viewModel.isLoading)
+                Container(
+                  color: Colors.black.withAlpha(77),
+                  child: const Center(
+                    child: CircularProgressIndicator(),
+                  ),
                 ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: _usernameController, // Изменено с _loginController
-                decoration: const InputDecoration(labelText: 'Логин/Имя пользователя'),
-              ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: _urlController,
-                decoration: const InputDecoration(labelText: 'URL/Веб-сайт'),
-                keyboardType: TextInputType.url,
-              ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: _notesController,
-                decoration: const InputDecoration(labelText: 'Заметки', alignLabelWithHint: true),
-                maxLines: 3,
-                keyboardType: TextInputType.multiline,
-              ),
-              const SizedBox(height: 16),
-              const Text('Дополнительные поля (ключ: значение, каждое с новой строки):', style: TextStyle(fontWeight: FontWeight.bold)),
-              TextFormField(
-                controller: _customFieldsController,
-                decoration: const InputDecoration(hintText: 'например, security_question: My first pet\npin_code: 1234', alignLabelWithHint: true),
-                maxLines: null,
-                keyboardType: TextInputType.multiline,
-              ),
             ],
-          ),
-        ),
+          );
+        },
       ),
+      // Можно добавить FAB для сохранения, если не используется AppBar action
+      // floatingActionButton: FloatingActionButton.extended(
+      //   onPressed: _viewModel.isLoading ? null : _saveEntry,
+      //   label: const Text('Save Entry'),
+      //   icon: const Icon(Icons.save),
+      // ),
     );
   }
 }
