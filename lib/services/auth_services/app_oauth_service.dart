@@ -1,12 +1,12 @@
 import 'dart:async';
 
 import 'package:app_links/app_links.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:logging/logging.dart';
 import 'dart:math';
 
 import 'package:url_launcher/url_launcher.dart';
 
-import '../../core/utils/consts.dart';
 import '../../core/utils/enums.dart';
 import '../../core/utils/pkce_util.dart';
 import 'git_auth.dart';
@@ -31,8 +31,14 @@ class AppOAuthService {
   final AppLinks _appLinks;
   final SecureGitAuth _secureGitAuth;
 
-  AppOAuthService({required AppLinks appLinks,
-    required SecureGitAuth secureGitAuth}):
+  late final githubClientId = dotenv.env['GITHUB_CLIENT_ID']!;
+  late final gitlabClientId = dotenv.env['GITLAB_CLIENT_ID']!;
+
+
+  AppOAuthService({
+    required AppLinks appLinks,
+    required SecureGitAuth secureGitAuth
+  }):
         _appLinks = appLinks,
         _secureGitAuth = secureGitAuth;
 

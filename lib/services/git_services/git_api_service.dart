@@ -1,10 +1,10 @@
 import 'dart:convert';
 
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
 import 'package:logging/logging.dart';
 import 'package:pass/services/auth_services/git_auth.dart';
 
-import '../../core/utils/consts.dart';
 import '../../core/utils/enums.dart';
 import '../../models/git_repository_model.dart';
 
@@ -26,6 +26,10 @@ class GitApiService {
 
   final SecureGitAuth _secureGitAuth;
   final http.Client _httpClient;
+
+  late final String githubClientId = dotenv.env['GITHUB_CLIENT_ID']!;
+  late final String gitlabClientSecret = dotenv.env['GITLAB_CLIENT_SECRET']!;
+  late final String gitlabClientId = dotenv.env['GITLAB_CLIENT_ID']!;
 
 
   GitApiService({this.gitLabBaseUrl = 'https://gitlab.com',
