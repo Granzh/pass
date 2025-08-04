@@ -38,6 +38,7 @@ class PasswordRepositoryService {
   Future<void> loadProfiles() => _profileManager.loadProfiles();
   List<PasswordRepositoryProfile> getProfiles() => _profileManager.getProfiles();
   Stream<List<PasswordRepositoryProfile>> get profilesStream => _profileManager.profilesStream;
+  Stream<PasswordRepositoryProfile?> get activeProfileStream => _profileManager.activeProfileStream;
 
 
   Future<PasswordRepositoryProfile> createProfile({
@@ -133,6 +134,14 @@ class PasswordRepositoryService {
     }
 
     return _profileManager.getProfile(profileId)!;
+  }
+
+  Future<PasswordRepositoryProfile> setActiveProfile(PasswordRepositoryProfile profile) async {
+    return _profileManager.setActiveProfile(profile);
+  }
+
+  Future<PasswordRepositoryProfile?> getActiveProfile() async {
+    return _profileManager.getActiveProfile();
   }
 
   Future<PasswordRepositoryProfile> updateProfileDetails({

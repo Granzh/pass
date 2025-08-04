@@ -2,6 +2,7 @@ import '../../models/password_repository_profile.dart';
 
 abstract class IProfileManager {
   Stream<List<PasswordRepositoryProfile>> get profilesStream;
+  Stream<PasswordRepositoryProfile?> get activeProfileStream;
 
   Future<void> loadProfiles();
   void dispose();
@@ -13,6 +14,8 @@ abstract class IProfileManager {
   Future<String?> getRefreshToken(String profileId);
 
   Future<PasswordRepositoryProfile> addProfile(PasswordRepositoryProfile profile);
+  Future<PasswordRepositoryProfile> setActiveProfile(PasswordRepositoryProfile profile);
+  Future<PasswordRepositoryProfile?> getActiveProfile();
 
   Future<PasswordRepositoryProfile> updateProfile(String profileIdToUpdate, PasswordRepositoryProfile updatedProfile);
   Future<void> deleteProfile(String profileId);

@@ -15,6 +15,10 @@ class RepositoryProfileManager implements IProfileManager {
   static String get profilesStoreKey => _profilesStoreKey;
 
   List<PasswordRepositoryProfile> _profiles = [];
+  PasswordRepositoryProfile? _activeProfile;
+  final _activeProfileController = StreamController<PasswordRepositoryProfile?>.broadcast();
+  @override
+  Stream<PasswordRepositoryProfile?> get activeProfileStream => _activeProfileController.stream;
 
   final _profilesController = StreamController<List<PasswordRepositoryProfile>>.broadcast();
   @override
@@ -217,5 +221,20 @@ class RepositoryProfileManager implements IProfileManager {
       _log.severe("Error persisting state: $e", e, s);
       throw Exception('Failed to persist state: $e');
     }
+  }
+
+  @override
+  Future<PasswordRepositoryProfile> setActiveProfile(PasswordRepositoryProfile profile) async {
+    if (_profiles.contains(profile)) {
+      _activeProfile = profile;
+      return profile;
+    } else {
+      throw Exception('Profile not found in the list.');
+    }
+  }
+
+  @override
+  Future<PasswordRepositoryProfile?> getActiveProfile() async {
+    return _activeProfile;
   }
 }
